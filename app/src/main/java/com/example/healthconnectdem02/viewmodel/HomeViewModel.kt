@@ -2,13 +2,19 @@ package com.example.healthconnectdem02.viewmodel
 
 import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.records.DistanceRecord
+import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.request.AggregateGroupByDurationRequest
 import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.response.InsertRecordsResponse
 import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.health.connect.client.units.Energy
+import androidx.health.connect.client.units.Length
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.healthconnectdem02.data.Repository
@@ -21,7 +27,11 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.Period
+import java.time.ZoneOffset
+import java.time.ZonedDateTime
+import java.time.temporal.ChronoUnit
 import javax.inject.Inject
+import kotlin.random.Random
 import kotlin.time.Duration.Companion.minutes
 
 @HiltViewModel
@@ -30,8 +40,15 @@ class HomeViewModel @Inject constructor(
 ):ViewModel() {
 
     private val _stepsData= MutableStateFlow("")
-
     val stepsData = _stepsData.asStateFlow()
+
+    val startOfDay = ZonedDateTime.now().truncatedTo(ChronoUnit.DAYS)
+    val latestStartOfSession = ZonedDateTime.now().minusMinutes(30)
+    val offset = Random.nextDouble()
+    val startOfSession = startOfDay.plusSeconds(
+        (Duration.between(startOfDay, latestStartOfSession).seconds * offset).toLong()
+    )
+    val endOfSession = startOfSession.plusMinutes(30)
 
     fun getMonthlySteps() {
         val endTime = LocalDateTime.now()
@@ -67,7 +84,7 @@ class HomeViewModel @Inject constructor(
         _stepsData.value = data
     }
     fun getTodaySteps() {
-        var steps =0
+      /*  var steps =0
         val endTime = LocalDateTime.now()
         val startTime = LocalDate.now().atStartOfDay()
        viewModelScope.launch {
@@ -89,7 +106,13 @@ class HomeViewModel @Inject constructor(
                Log.i("exception",e.toString())
                // Run error handling here
            }
-       }
+       }*/
+
+        viewModelScope.launch {
+            val stepsRecords = readStepsForToday(repository.healthConnectClient)
+            displaySteps(stepsRecords)
+
+        }
     }
     fun getHeartRate(
 
@@ -144,6 +167,97 @@ class HomeViewModel @Inject constructor(
             }
         }
     }
+
+    fun insertSteps(){
+        viewModelScope.launch {
+            try {
+                val response =writeExerciseSession(
+                    start = startOfSession,
+                    end = endOfSession,
+                    healthConnectClient = repository.healthConnectClient
+                )
+
+                Log.i("Response",response.recordIdsList.toString())
+            }catch (e:Exception){
+                Log.i("Exception",e.toString())
+            }
+
+        }
+    }
+
+    suspend fun writeExerciseSession(
+        start: ZonedDateTime,
+        end: ZonedDateTime,
+        healthConnectClient: HealthConnectClient,
+    ): InsertRecordsResponse {
+        return healthConnectClient.insertRecords(
+            listOf(
+
+                StepsRecord(
+                    startTime = start.toInstant(),
+                    startZoneOffset = start.offset,
+                    endTime = end.toInstant(),
+                    endZoneOffset = end.offset,
+                    count = 122
+                ),
+                DistanceRecord(
+                    startTime = start.toInstant(),
+                    startZoneOffset = start.offset,
+                    endTime = end.toInstant(),
+                    endZoneOffset = end.offset,
+                    distance = Length.meters((1000 + 100 * Random.nextInt(20)).toDouble())
+                ),
+                TotalCaloriesBurnedRecord(
+                    startTime = start.toInstant(),
+                    startZoneOffset = start.offset,
+                    endTime = end.toInstant(),
+                    endZoneOffset = end.offset,
+                    energy = Energy.calories((140 + Random.nextInt(20)) * 0.01)
+                )
+            )
+        )
+    }
+
+    private suspend fun getStepsCount(startTime: Instant, endTime: Instant): Long {
+        val readRequest = ReadRecordsRequest(
+            recordType = StepsRecord::class,
+            timeRangeFilter = TimeRangeFilter.between(startTime, endTime)
+        )
+
+        val records = repository.healthConnectClient.readRecords(readRequest)
+        return records.records.sumOf { it.count }
+    }
+    suspend fun readStepsForToday(healthConnectClient: HealthConnectClient): List<StepsRecord> {
+        val today = LocalDate.now()
+        val startOfDay = today.atStartOfDay().toInstant(ZoneOffset.UTC)
+        val endOfDay = today.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
+
+        val response = healthConnectClient.readRecords(
+            ReadRecordsRequest(
+                recordType = StepsRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(startOfDay, endOfDay)
+            )
+        )
+
+
+        return response.records
+    }
+    private fun displaySteps(stepsRecords: List<StepsRecord>) {
+        var totalSteps = 0L
+        for (record in stepsRecords) {
+            totalSteps += record.count
+        }
+        updateStepsData(data = "$totalSteps today steps")
+        // Now, you can use totalSteps to update your UI
+        Log.d("HealthConnect", "Total steps for today: $totalSteps")
+    }
+
+
+
+
+
+
+
 
 
 
